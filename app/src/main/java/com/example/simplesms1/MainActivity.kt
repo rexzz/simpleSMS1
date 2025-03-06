@@ -1,23 +1,24 @@
 package com.example.simplesms1
 
-
 import android.Manifest
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
 import android.telephony.SmsMessage
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -25,12 +26,29 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.*
 
 class MainActivity : ComponentActivity() {
     private val receivedMessages = MutableStateFlow("")
+    // Register activity result before onResume
+    private val requestPermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            val granted = permissions.all { it.value }
+            if (granted) {
+                // Permission granted, proceed with sending SMS
+                sendSms("6462835775","run")
+            } else {
+                // Handle the case when permission is denied
+                Toast.makeText(this, "Permission Denied", Toast.LENGTH_SHORT).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestPermissionsLauncher.launch(
+            arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+        )
+
         setContent {
             SmsApp()
         }
@@ -44,6 +62,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun SmsApp() {
+        val context = LocalContext.current
         var phoneNumber by remember { mutableStateOf(TextFieldValue()) }
         var messageText by remember { mutableStateOf(TextFieldValue()) }
         val receivedMessage by receivedMessages.asStateFlow().collectAsState("")
@@ -68,11 +87,20 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Button(
-                onClick = { sendSms(phoneNumber.text, messageText.text) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Send SMS")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { sendSms(phoneNumber.text, messageText.text) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Send SMS")
+                }
+
+                Button(
+                    onClick = { startVoiceInput(context) { spokenText -> messageText = TextFieldValue(spokenText) } },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Voice Input")
+                }
             }
 
             Text("Received Messages:", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
@@ -134,8 +162,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun startVoiceInput(context: Context, onResult: (String) -> Unit) {
+        val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+        }
+
+        speechRecognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onResults(results: Bundle?) {
+                val spokenText = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.get(0) ?: ""
+                onResult(spokenText)
+            }
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(error: Int) {}
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+        speechRecognizer.startListening(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(smsReceiver)
     }
 }
+
