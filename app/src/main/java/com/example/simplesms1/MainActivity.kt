@@ -11,6 +11,7 @@ import android.telephony.SmsManager
 import android.telephony.SmsMessage
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
@@ -23,41 +24,86 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import android.speech.tts.TextToSpeech
+import android.speech.tts.TextToSpeech.OnInitListener
+import android.speech.tts.TextToSpeech.LANG_AVAILABLE
+import android.speech.tts.TextToSpeech.LANG_MISSING_DATA
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.*
 
 class MainActivity : ComponentActivity() {
-    private val receivedMessages = MutableStateFlow("")
+
+    private val receivedMessages = MutableStateFlow<List<String>>(emptyList())  // Use list to store messages
+    private lateinit var textToSpeech: TextToSpeech
+
+    //private val receivedMessages = MutableStateFlow("")
     // Register activity result before onResume
     private val requestPermissionsLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             val granted = permissions.all { it.value }
             if (granted) {
                 // Permission granted, proceed with sending SMS
-                sendSms("6462835775","run")
+                Toast.makeText(this, "Permission Granted", Toast.LENGTH_SHORT).show()
+                //sendSms("6462835775","run")
             } else {
                 // Handle the case when permission is denied
                 Toast.makeText(this, "Permission Denied", Toast.LENGTH_SHORT).show()
             }
         }
 
+
+
+    private val requestAudioPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            // Permission granted, you can now use the microphone for voice input
+            //startVoiceInput()
+            Toast.makeText(this, "Audio Permission granted", Toast.LENGTH_SHORT).show()
+        } else {
+            // Permission denied, show a message or handle the scenario
+            Toast.makeText(this, "Audio Permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestPermissionsLauncher.launch(
-            arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
-        )
 
-        setContent {
-            SmsApp()
+        /*if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startVoiceInput()
+        } else {
+            requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
+        */
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
             requestReceiveSmsPermission()
         } else {
             registerReceiver(smsReceiver, IntentFilter("android.provider.Telephony.SMS_RECEIVED"))
         }
+
+
+
+        requestPermissionsLauncher.launch(
+            arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+        )
+
+        textToSpeech = TextToSpeech(this, OnInitListener { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                val langResult = textToSpeech.setLanguage(Locale.getDefault())
+                if (langResult == LANG_MISSING_DATA || langResult == LANG_AVAILABLE) {
+                    Toast.makeText(this, "Text-to-Speech Initialized", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "Text-to-Speech Initialization Failed", Toast.LENGTH_SHORT).show()
+            }
+        })
+
+        setContent {
+            SmsApp()
+        }
+
+
     }
 
     @Composable
@@ -65,7 +111,18 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         var phoneNumber by remember { mutableStateOf(TextFieldValue()) }
         var messageText by remember { mutableStateOf(TextFieldValue()) }
-        val receivedMessage by receivedMessages.asStateFlow().collectAsState("")
+        var isTtsEnabled by remember { mutableStateOf(false) }  // Track if TTS is enabled
+
+        val receivedMessageList by receivedMessages.collectAsState(emptyList())
+
+        val requestAudioPermissionLauncher =
+            rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+                if (isGranted) {
+                    startVoiceInput(context) { spokenText -> messageText = TextFieldValue(spokenText) }
+                } else {
+                    Toast.makeText(context, "Permission Denied", Toast.LENGTH_SHORT).show()
+                }
+            }
 
         Column(
             modifier = Modifier
@@ -96,15 +153,46 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Button(
-                    onClick = { startVoiceInput(context) { spokenText -> messageText = TextFieldValue(spokenText) } },
+                    onClick = {// Check permission and request it if needed
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            startVoiceInput(context) { spokenText -> messageText = TextFieldValue(spokenText) }
+                        } else {
+                            requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Voice Input")
                 }
+
+                Button(
+                    onClick = {
+                        isTtsEnabled = !isTtsEnabled  // Toggle TTS state
+                        if (isTtsEnabled) {
+                            Toast.makeText(context, "Text-to-Speech Activated", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Text-to-Speech Deactivated", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isTtsEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("TTS ${if (isTtsEnabled) "On" else "Off"}")
+                }
+
+
+
+
             }
 
             Text("Received Messages:", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
-            Text(receivedMessage, modifier = Modifier.fillMaxWidth())
+            receivedMessageList.forEach { message ->
+                Text(message, modifier = Modifier.fillMaxWidth())
+            }
+        //Text(receivedMessage, modifier = Modifier.fillMaxWidth())
         }
     }
 
@@ -145,7 +233,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
     }
 
-    private val smsReceiver = object : BroadcastReceiver() {
+    /*private val smsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val bundle = intent?.extras
             if (bundle != null) {
@@ -160,8 +248,39 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
+    } */
+    private val smsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val bundle = intent?.extras
+            if (bundle != null) {
+                val pdus = bundle.get("pdus") as? Array<*>
+                pdus?.forEach { pdu ->
+                    val smsMessage = SmsMessage.createFromPdu(pdu as ByteArray)
+                    val sender = smsMessage.originatingAddress
+                    val messageBody = smsMessage.messageBody
 
+                    if (messageBody.isNotEmpty()) {
+                        if (messageBody.isNotEmpty()) {
+                            // Append the received message to the UI
+                            lifecycleScope.launch {
+                                val displayMessage = "From: $sender\n$messageBody\n\n"
+                                receivedMessages.emit(receivedMessages.value + displayMessage)
+                            }
+                        }
+                    }
+/*
+                    (context as? ComponentActivity)?.lifecycleScope?.launch {
+                        //val newMessage = "From: $sender\n$messageBody\n\n" + receivedMessages.value
+                        //receivedMessages.emit(newMessage)  // Force UI update
+                        receivedMessages.emit(receivedMessages.value + "From: $sender\n$messageBody\n\n")  // Append to list
+                    }
+                    */
+                }
+            }
+        }
+
+
+    }
     private fun startVoiceInput(context: Context, onResult: (String) -> Unit) {
         val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -188,6 +307,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        textToSpeech.stop()
+        textToSpeech.shutdown()
         unregisterReceiver(smsReceiver)
     }
 }
