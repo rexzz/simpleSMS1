@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
 
     private val receivedMessages = MutableStateFlow<List<String>>(emptyList())  // Use list to store messages
     private lateinit var textToSpeech: TextToSpeech
+    var isTtsEnabled by mutableStateOf(false)
+
 
     //private val receivedMessages = MutableStateFlow("")
     // Register activity result before onResume
@@ -111,7 +113,10 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         var phoneNumber by remember { mutableStateOf(TextFieldValue()) }
         var messageText by remember { mutableStateOf(TextFieldValue()) }
-        var isTtsEnabled by remember { mutableStateOf(false) }  // Track if TTS is enabled
+
+        LaunchedEffect(Unit) {
+            // You can initialize TextToSpeech here if needed.
+        }
 
         val receivedMessageList by receivedMessages.collectAsState(emptyList())
 
@@ -182,9 +187,6 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text("TTS ${if (isTtsEnabled) "On" else "Off"}")
                 }
-
-
-
 
             }
 
@@ -265,6 +267,9 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch {
                                 val displayMessage = "From: $sender\n$messageBody\n\n"
                                 receivedMessages.emit(receivedMessages.value + displayMessage)
+                                if (isTtsEnabled) {
+                                    textToSpeech?.speak(messageBody, TextToSpeech.QUEUE_FLUSH, null, null)
+                                }
                             }
                         }
                     }
