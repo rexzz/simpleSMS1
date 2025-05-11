@@ -35,6 +35,7 @@ import android.speech.tts.TextToSpeech.LANG_AVAILABLE
 import android.speech.tts.TextToSpeech.LANG_MISSING_DATA
 import android.media.AudioManager
 import android.provider.Settings
+import android.media.AudioAttributes
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -121,6 +122,26 @@ class MainActivity : ComponentActivity() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         previousVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
 
+        // Set up audio focus
+        val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    android.util.Log.d("TEST", "Audio focus lost")
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    android.util.Log.d("TEST", "Audio focus gained")
+                }
+            }
+        }
+
+        // Request audio focus
+        val focusResult = audioManager.requestAudioFocus(
+            audioFocusChangeListener,
+            AudioManager.STREAM_MUSIC,
+            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+        )
+        android.util.Log.d("TEST", "Audio focus request result: $focusResult")
+
         // Handle incoming intents
         handleIntent(intent)
 
@@ -145,6 +166,12 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this, "Text-to-Speech Initialized", Toast.LENGTH_SHORT).show()
                 }
                 
+                // Set audio stream type
+                textToSpeech.setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build())
+
                 // Get available voices
                 val voices = textToSpeech.voices
                 if (voices != null) {
@@ -160,6 +187,9 @@ class MainActivity : ComponentActivity() {
                 textToSpeech.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         android.util.Log.d("TEST", "TTS started speaking utterance: $utteranceId")
+                        // Ensure volume is up
+                        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0)
                     }
 
                     override fun onDone(utteranceId: String?) {
@@ -301,40 +331,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openTTSSettings() {
-        try {
-            // First try to open general settings
-            val intent = Intent(Settings.ACTION_SETTINGS)
-            startActivity(intent)
-            
-            // Show a more detailed toast with instructions
-            Toast.makeText(
-                this,
-                "Please navigate to:\n" +
-                "1. Accessibility\n" +
-                "2. Vision Enhancements\n" +
-                "3. Text-to-speech output\n" +
-                "4. Select Google Text-to-speech\n" +
-                "5. Install voice data if needed",
-                Toast.LENGTH_LONG
-            ).show()
-            
-        } catch (e: Exception) {
-            android.util.Log.e("TEST", "Error opening settings: ${e.message}")
-            Toast.makeText(
-                this,
-                "Could not open settings. Please check Vision Enhancements in Accessibility settings.",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
     @Composable
     fun SmsApp() {
         val context = LocalContext.current
         val currentUiState by uiState.collectAsState()
         var isProcessingContact by remember { mutableStateOf(false) }
-        var showTTSSettingsDialog by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
             // Initialize other things if needed
@@ -373,49 +374,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-        if (showTTSSettingsDialog) {
-            AlertDialog(
-                onDismissRequest = { showTTSSettingsDialog = false },
-                title = { Text("TTS Setup Instructions") },
-                text = {
-                    Text(
-                        "To enable Text-to-Speech:\n\n" +
-                        "1. Go to Accessibility\n" +
-                        "2. Select Vision Enhancements\n" +
-                        "3. Find Text-to-speech output\n" +
-                        "4. Select Google Text-to-speech\n" +
-                        "5. Install voice data if needed\n\n" +
-                        "After setup, return to the app and try again."
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = { showTTSSettingsDialog = false }) {
-                        Text("OK")
-                    }
-                }
-            )
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // TTS Settings Button at the top
-            Button(
-                onClick = { 
-                    openTTSSettings()
-                    showTTSSettingsDialog = true
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Open TTS Settings")
-            }
-
             // Voice Phone Button at the top
             Button(
                 onClick = {
@@ -796,23 +760,66 @@ class MainActivity : ComponentActivity() {
                             val displayMessage = "From: $sender\n$messageBody\n\n"
                             receivedMessages.emit(receivedMessages.value + displayMessage)
                             
+                            android.util.Log.d("TEST", "TTS status - Initialized: ${::textToSpeech.isInitialized}, Enabled: $isTtsEnabled")
+                            
                             if (isTtsEnabled) {
-                                // Get contact name if available
-                                val senderName = sender?.let { getContactNameFromNumber(it) }
-                                val senderText = if (senderName != null) {
-                                    "Message from $senderName"
-                                } else {
-                                    "Message from $sender"
-                                }
+                                try {
+                                    // Get contact name if available
+                                    val senderName = sender?.let { getContactNameFromNumber(it) }
+                                    val senderText = if (senderName != null) {
+                                        "Message from $senderName"
+                                    } else {
+                                        "Message from $sender"
+                                    }
 
-                                // Speak sender first
-                                textToSpeech.speak(senderText, TextToSpeech.QUEUE_ADD, null, null)
-                                
-                                // Add a small delay
-                                kotlinx.coroutines.delay(500)
-                                
-                                // Then speak message
-                                textToSpeech.speak(messageBody, TextToSpeech.QUEUE_ADD, null, null)
+                                    android.util.Log.d("TEST", "Attempting to speak sender: $senderText")
+                                    
+                                    // Create params with utterance ID for tracking
+                                    val params = Bundle()
+                                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "SENDER_UTTERANCE")
+                                    
+                                    // Speak sender first with FLUSH to clear any queued speech
+                                    val senderResult = textToSpeech.speak(senderText, TextToSpeech.QUEUE_FLUSH, params, "SENDER_UTTERANCE")
+                                    android.util.Log.d("TEST", "TTS speak result for sender: $senderResult")
+                                    
+                                    if (senderResult == TextToSpeech.ERROR) {
+                                        android.util.Log.e("TEST", "Failed to speak sender, retrying...")
+                                        // Retry with a different queue mode
+                                        textToSpeech.speak(senderText, TextToSpeech.QUEUE_ADD, null, null)
+                                    }
+                                    
+                                    // Add a small delay
+                                    kotlinx.coroutines.delay(1000)
+                                    
+                                    android.util.Log.d("TEST", "Attempting to speak message: $messageBody")
+                                    
+                                    // Create new params for message
+                                    val messageParams = Bundle()
+                                    messageParams.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "MESSAGE_UTTERANCE")
+                                    
+                                    // Speak message
+                                    val messageResult = textToSpeech.speak(messageBody, TextToSpeech.QUEUE_ADD, messageParams, "MESSAGE_UTTERANCE")
+                                    android.util.Log.d("TEST", "TTS speak result for message: $messageResult")
+                                    
+                                    if (messageResult == TextToSpeech.ERROR) {
+                                        android.util.Log.e("TEST", "Failed to speak message, retrying...")
+                                        // Retry with a different queue mode
+                                        textToSpeech.speak(messageBody, TextToSpeech.QUEUE_ADD, null, null)
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("TEST", "Error in TTS: ${e.message}")
+                                    // Try to reinitialize TTS
+                                    textToSpeech.shutdown()
+                                    textToSpeech = TextToSpeech(this@MainActivity) { status ->
+                                        if (status == TextToSpeech.SUCCESS) {
+                                            textToSpeech.setLanguage(Locale.getDefault())
+                                            // Retry speaking
+                                            textToSpeech.speak("Message received", TextToSpeech.QUEUE_FLUSH, null, null)
+                                        }
+                                    }
+                                }
+                            } else {
+                                android.util.Log.d("TEST", "TTS is disabled, not speaking message")
                             }
                         }
                     }
@@ -1257,6 +1264,8 @@ class MainActivity : ComponentActivity() {
                 speechRecognizer.destroy()
             }
             unregisterReceiver(smsReceiver)
+            // Restore previous volume
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, previousVolume, 0)
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Error in onDestroy: ${e.message}")
         }
